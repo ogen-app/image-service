@@ -29,12 +29,18 @@ RUN go build -trimpath -ldflags="-s -w" -o /image-service ./cmd/image-service
 # ships grpc_health_probe since there is no HTTP endpoint to health-check.
 FROM debian:bookworm-slim
 ARG GRPC_HEALTH_PROBE_VERSION=v0.4.34
+# Pinned SHA-256 of grpc_health_probe-linux-amd64 for the version above. The
+# binary is fetched over the network and later executed in the container, so its
+# integrity is verified and the build FAILS on mismatch (CWE-494 — no download of
+# code without an integrity check). Update BOTH args together when bumping.
+ARG GRPC_HEALTH_PROBE_SHA256=3ddaf85583613c97693e9b8aaa251dac07e73e366e159a7ccadbcf553117fcef
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
       ca-certificates libvips wget; \
     wget -qO /usr/local/bin/grpc_health_probe \
       "https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/${GRPC_HEALTH_PROBE_VERSION}/grpc_health_probe-linux-amd64"; \
+    echo "${GRPC_HEALTH_PROBE_SHA256}  /usr/local/bin/grpc_health_probe" | sha256sum -c -; \
     chmod +x /usr/local/bin/grpc_health_probe; \
     apt-get purge -y wget; apt-get autoremove -y; rm -rf /var/lib/apt/lists/*; \
     useradd -r -u 10001 app

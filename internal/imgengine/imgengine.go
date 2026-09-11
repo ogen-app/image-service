@@ -218,10 +218,14 @@ type ExtractResult struct {
 }
 
 // PrepareResult is PrepareAttachment's output: the source metadata plus the
-// metadata-stripped (pixels-preserved) derivative bytes.
+// metadata-stripped (pixels-preserved) derivative bytes and the derivative's own
+// MIME (which can differ from Meta.MIME — e.g. a HEIC original is re-emitted as
+// lossless PNG). Callers PUT/serve/describe the derivative by DerivedMIME, not
+// the original Meta.MIME.
 type PrepareResult struct {
-	Meta  Meta
-	Bytes []byte // same pixels, EXIF/geo stripped; PUT to dest_put_url
+	Meta        Meta
+	DerivedMIME string // MIME of Bytes (the stored derivative)
+	Bytes       []byte // same pixels, EXIF/geo stripped; PUT to dest_put_url
 }
 
 // ─── Extract path ─────────────────────────────────────────────────────────────
@@ -260,6 +264,22 @@ func (e *Engine) Extract(ctx context.Context, sourceURL, destPutURL string, sour
 		return nil, err
 	}
 	defer ref.Close()
+
+	// sourceNormalized: the source URL already points at a service-produced
+	// derivative (a re-extraction reading back normalized.png), so there is nothing
+	// to re-encode and nothing new to PUT (the derivative already lives at dest).
+	// Return the fetched bytes and their metadata for the vision pass. This is the
+	// case the parameter documents; without this branch it was silently ignored and
+	// the image was needlessly re-encoded every time.
+	if sourceNormalized {
+		return &ExtractResult{
+			Meta:          meta,
+			DerivedMIME:   meta.MIME,
+			DerivedWidth:  ref.Width(),
+			DerivedHeight: ref.Height(),
+			Bytes:         orig,
+		}, nil
+	}
 
 	// The stored derivative: strip metadata always; optionally downscale a
 	// non-text image so the content bank doesn't hold a 100 MP photo. Text-bearing
@@ -328,23 +348,35 @@ func (e *Engine) PrepareAttachment(ctx context.Context, sourceURL, destPutURL st
 	}
 	defer ref.Close()
 
-	// When not stripping (rare — default semantics strip), the derivative is the
-	// original bytes verbatim, so pixels AND metadata are untouched.
-	derived := orig
-	if stripMetadata {
-		derived, err = e.encodePixelsPreserved(ref, meta.MIME)
+	// The derivative starts as the original bytes (its MIME is the source MIME).
+	// Stripping re-emits without metadata and may change the container (so the
+	// derivative MIME can differ from the source), which is why we track it and
+	// PUT/return by it — not by meta.MIME.
+	derived, derivedMIME := orig, meta.MIME
+	switch {
+	case !stripMetadata:
+		// Not stripping (rare; ogen always strips): pixels AND metadata untouched.
+	case meta.IsAnimated:
+		// Animated GIF/WebP: a single-frame re-encode would DROP every frame but the
+		// first, silently turning an animation into a still. Preserve all frames by
+		// passing the original bytes through unchanged. (Animated GIF carries no EXIF
+		// to strip; stripping metadata from animated WebP while keeping frames needs
+		// a multi-page re-export and is deferred — the priority is never destroying
+		// the user's animation on a publishing artifact.)
+	default:
+		derived, derivedMIME, err = e.encodePixelsPreserved(ref, meta.MIME)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	if strings.TrimSpace(destPutURL) != "" {
-		if err := e.put(ctx, destPutURL, derived, meta.MIME); err != nil {
+		if err := e.put(ctx, destPutURL, derived, derivedMIME); err != nil {
 			return nil, err
 		}
 	}
 
-	return &PrepareResult{Meta: meta, Bytes: derived}, nil
+	return &PrepareResult{Meta: meta, DerivedMIME: derivedMIME, Bytes: derived}, nil
 }
 
 // ─── Load, validate, bomb-guard ───────────────────────────────────────────────
@@ -455,7 +487,7 @@ func (e *Engine) encodeDerivative(ref *vips.ImageRef) ([]byte, string, int, int,
 // lossless. Other allowed formats (HEIC/AVIF/TIFF/BMP/GIF) that don't round-trip
 // cleanly fall back to a lossless PNG, since preserving the exact pixels matters
 // more than preserving the container for a rarely-used input.
-func (e *Engine) encodePixelsPreserved(ref *vips.ImageRef, sourceMIME string) ([]byte, error) {
+func (e *Engine) encodePixelsPreserved(ref *vips.ImageRef, sourceMIME string) ([]byte, string, error) {
 	switch sourceMIME {
 	case "image/jpeg":
 		params := vips.NewJpegExportParams()
@@ -464,29 +496,30 @@ func (e *Engine) encodePixelsPreserved(ref *vips.ImageRef, sourceMIME string) ([
 		params.SubsampleMode = vips.VipsForeignSubsampleOff // no chroma subsampling
 		b, _, err := ref.ExportJpeg(params)
 		if err != nil {
-			return nil, fmt.Errorf("%w: strip jpeg: %v", ErrCorrupt, err)
+			return nil, "", fmt.Errorf("%w: strip jpeg: %v", ErrCorrupt, err)
 		}
-		return b, nil
+		return b, "image/jpeg", nil
 	case "image/webp":
 		params := vips.NewWebpExportParams()
 		params.StripMetadata = true
 		params.Lossless = true
 		b, _, err := ref.ExportWebp(params)
 		if err != nil {
-			return nil, fmt.Errorf("%w: strip webp: %v", ErrCorrupt, err)
+			return nil, "", fmt.Errorf("%w: strip webp: %v", ErrCorrupt, err)
 		}
-		return b, nil
+		return b, "image/webp", nil
 	default:
-		// PNG for image/png and every other allowed format: lossless, alpha-safe,
-		// universally decodable. Pixels are preserved exactly; only the container
-		// and the metadata change.
+		// PNG for image/png and every other allowed still format: lossless,
+		// alpha-safe, universally decodable. Pixels are preserved exactly; only the
+		// container and the metadata change — so the derivative MIME becomes
+		// image/png even when the source was e.g. HEIC/AVIF/TIFF/BMP.
 		params := vips.NewPngExportParams()
 		params.StripMetadata = true
 		b, _, err := ref.ExportPng(params)
 		if err != nil {
-			return nil, fmt.Errorf("%w: strip png: %v", ErrCorrupt, err)
+			return nil, "", fmt.Errorf("%w: strip png: %v", ErrCorrupt, err)
 		}
-		return b, nil
+		return b, "image/png", nil
 	}
 }
 
@@ -875,11 +908,15 @@ func isoBMFFDimensions(b []byte) (int, int, bool) {
 		scan = scan[:limit]
 	}
 	idx := bytes.Index(scan, []byte("ispe"))
-	if idx < 0 || idx+12 > len(scan) {
+	if idx < 0 {
 		return 0, 0, false
 	}
-	// After "ispe": 4 bytes version+flags, then width (uint32 BE), height (uint32 BE).
-	p := idx + 4
+	// bytes.Index points at the "ispe" box TYPE (4 bytes). The FullBox layout is:
+	//   [type "ispe"(4)] [version(1)+flags(3)] [width uint32 BE] [height uint32 BE]
+	// so the dimensions start 8 bytes past the marker (4 type + 4 version/flags).
+	// The previous code used idx+4, reading the version/flags word as the width and
+	// the width as the height — so it never returned real dimensions.
+	p := idx + 8
 	if p+8 > len(scan) {
 		return 0, 0, false
 	}

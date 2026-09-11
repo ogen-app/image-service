@@ -148,30 +148,32 @@ func (s *Server) Extract(ctx context.Context, req *imagev1.ExtractRequest) (*ima
 
 // PrepareAttachment runs the light path: validate + metadata + EXIF/geo strip
 // (pixels preserved) + optional alt text. It does NOT require a Gemini key unless
-// want_alt_text is set. strip_metadata carries default-true semantics: the proto
-// zero value (false) would defeat the privacy fix, so an unset flag is treated as
-// "strip". Callers that genuinely want metadata retained must be handled by ogen
-// (which owns the request construction) — here, a false flag is honored as "do
-// not strip" only when the caller explicitly wants raw bytes. To keep the privacy
-// default safe, we strip unless the request explicitly opts out; ogen always sets
-// strip_metadata=true.
+// want_alt_text is set.
+//
+// Metadata is stripped UNCONDITIONALLY: EXIF/geolocation stripping is a non-
+// negotiable privacy invariant for every ingested image (CON-281 §7/§17), and the
+// proto strip_metadata field defaults false on the wire — honoring that default
+// would silently publish geotagged photos. So the request flag is ignored here
+// and we always strip. (Animated inputs are preserved frame-for-frame by the
+// engine, which passes them through rather than flattening — see imgengine.)
 func (s *Server) PrepareAttachment(ctx context.Context, req *imagev1.PrepareAttachmentRequest) (*imagev1.PrepareAttachmentResponse, error) {
 	src := strings.TrimSpace(req.GetSourceUrl())
 	if src == "" {
 		return nil, status.Error(codes.InvalidArgument, "source_url is required")
 	}
 
-	// Validate + metadata + strip via libvips. GetStripMetadata() defaults false
-	// on the wire; ogen sets it true. We pass it through directly — the field docs
-	// and README make the default-true expectation explicit on the caller side.
-	pres, err := s.engine.PrepareAttachment(ctx, src, strings.TrimSpace(req.GetDestPutUrl()), req.GetStripMetadata())
+	// Always strip (privacy invariant) — do NOT thread req.GetStripMetadata().
+	pres, err := s.engine.PrepareAttachment(ctx, src, strings.TrimSpace(req.GetDestPutUrl()), true)
 	if err != nil {
 		return nil, mapEngineErr(err)
 	}
 
+	// Report the DERIVATIVE (what ogen stores + publishes): its MIME and byte size,
+	// but the ORIGINAL's checksum (ogen dedupes on it) and pixel dimensions (pixels
+	// are preserved, so dims are unchanged).
 	resp := &imagev1.PrepareAttachmentResponse{
-		Mime:           pres.Meta.MIME,
-		SizeBytes:      pres.Meta.SizeBytes,
+		Mime:           pres.DerivedMIME,
+		SizeBytes:      int64(len(pres.Bytes)),
 		Width:          int32(pres.Meta.Width),
 		Height:         int32(pres.Meta.Height),
 		IsAnimated:     pres.Meta.IsAnimated,
@@ -186,9 +188,9 @@ func (s *Server) PrepareAttachment(ctx context.Context, req *imagev1.PrepareAtta
 		}
 		model := orStr(req.GetAltTextModel(), s.def.AltTextModel)
 		maxChars := orInt(int(req.GetAltTextMaxChars()), s.def.AltTextMaxChars)
-		// Run alt text over the stripped derivative bytes (same pixels), not a
-		// re-fetch of the source.
-		alt, _, usage, aerr := s.vis.GenerateAltText(ctx, pres.Bytes, pres.Meta.MIME, model, maxChars)
+		// Run alt text over the stripped derivative bytes (same pixels) + its MIME,
+		// not a re-fetch of the source.
+		alt, _, usage, aerr := s.vis.GenerateAltText(ctx, pres.Bytes, pres.DerivedMIME, model, maxChars)
 		if aerr != nil {
 			return nil, mapVisionErr(aerr)
 		}
@@ -199,11 +201,11 @@ func (s *Server) PrepareAttachment(ctx context.Context, req *imagev1.PrepareAtta
 	slog.InfoContext(ctx, "prepare attachment complete",
 		"component", "server.prepare",
 		"filename", req.GetFilename(),
-		"mime", pres.Meta.MIME,
+		"mime", pres.DerivedMIME,
 		"width", pres.Meta.Width,
 		"height", pres.Meta.Height,
 		"is_animated", pres.Meta.IsAnimated,
-		"stripped", req.GetStripMetadata(),
+		"stripped", true,
 		"alt_text", req.GetWantAltText(),
 	)
 	return resp, nil
@@ -211,8 +213,10 @@ func (s *Server) PrepareAttachment(ctx context.Context, req *imagev1.PrepareAtta
 
 // GenerateAltText (re)generates alt text for an existing image. Requires a Gemini
 // key. It fetches + validates the image via the engine's PrepareAttachment path
-// (without stripping/PUT — dest empty) so the same bomb guards apply, then runs
-// the alt-text model over the bytes.
+// with stripping ON (dest empty → no PUT) so the same bomb guards apply AND the
+// bytes handed to Gemini are EXIF/geo-stripped — the model must never receive the
+// user's original metadata (CON-281 §17). It then runs the alt-text model over
+// the stripped derivative.
 func (s *Server) GenerateAltText(ctx context.Context, req *imagev1.GenerateAltTextRequest) (*imagev1.GenerateAltTextResponse, error) {
 	src := strings.TrimSpace(req.GetSourceUrl())
 	if src == "" {
@@ -222,23 +226,23 @@ func (s *Server) GenerateAltText(ctx context.Context, req *imagev1.GenerateAltTe
 		return nil, status.Error(codes.Unavailable, "vision backend not configured (no gemini api key)")
 	}
 
-	// Fetch + validate + bomb-guard without stripping or PUTting (dest empty,
-	// stripMetadata false → derivative is the original bytes, reused below).
-	pres, err := s.engine.PrepareAttachment(ctx, src, "", false)
+	// Fetch + validate + bomb-guard + STRIP metadata (no PUT — dest empty). The
+	// stripped derivative is what Gemini sees.
+	pres, err := s.engine.PrepareAttachment(ctx, src, "", true)
 	if err != nil {
 		return nil, mapEngineErr(err)
 	}
 
 	model := orStr(req.GetModel(), s.def.AltTextModel)
 	maxChars := orInt(int(req.GetMaxChars()), s.def.AltTextMaxChars)
-	alt, _, usage, aerr := s.vis.GenerateAltText(ctx, pres.Bytes, pres.Meta.MIME, model, maxChars)
+	alt, _, usage, aerr := s.vis.GenerateAltText(ctx, pres.Bytes, pres.DerivedMIME, model, maxChars)
 	if aerr != nil {
 		return nil, mapVisionErr(aerr)
 	}
 
 	slog.InfoContext(ctx, "generate alt text complete",
 		"component", "server.alttext",
-		"mime", pres.Meta.MIME,
+		"mime", pres.DerivedMIME,
 		"model", model,
 		"chars", len([]rune(alt)),
 	)

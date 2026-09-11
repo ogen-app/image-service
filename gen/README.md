@@ -22,12 +22,13 @@ Managed mode's `go_package_prefix` override keeps every import path under
 make proto        # == buf generate buf.build/ogen-app/proto:v1.3.0
 ```
 
-The stubs are produced by `buf generate` against the **pinned** shared module —
-they cannot be produced offline, so they are committed the same way the
-pdf/audio/document-service siblings commit theirs. Regenerate with `make proto`
-in a checkout with `buf` available, then commit the result.
+The stubs are produced by `buf generate` against the **pinned** shared module
+and committed (the same way the pdf/audio/document-service siblings commit
+theirs); CI regenerates and fails on drift. `buf generate` emits **every**
+package in the module (tenants/secrets/platforms/pdf/video/audio as well), but
+only `image.v1` and `documents.v1` are imported by this service. Regenerate with
+`make proto` in a checkout with `buf` + the pinned `protoc-gen-go` plugins, then
+commit the result.
 
-> **Not published yet:** `make proto` requires
-> `buf.build/ogen-app/proto:v1.3.0` (which carries `image.v1` + the extended
-> `documents.v1.Anchor`) to be tagged/published to the BSR first. Until then the
-> stubs cannot be generated.
+`buf.build/ogen-app/proto:v1.3.0` (which carries `image.v1` + the extended
+`documents.v1.Anchor`) is published to the BSR, so `make proto` resolves.

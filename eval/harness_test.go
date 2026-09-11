@@ -14,6 +14,9 @@ package eval
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -80,9 +83,30 @@ func TestGoldenEval(t *testing.T) {
 
 			imgBytes, mime := loadFixture(t, tc.File)
 
+			// Serve the fixture over a throwaway HTTP server so the REAL engine path
+			// (fetch → libvips validate/bomb-guard/normalize → derivative) is
+			// exercised — exactly as production runs, minus the presigned S3
+			// transfer. The vision pass then consumes the engine's derivative, not
+			// the raw fixture, so this gate covers normalization as it claims to.
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet {
+					w.Header().Set("Content-Type", mime)
+					_, _ = w.Write(imgBytes)
+					return
+				}
+				_, _ = io.Copy(io.Discard, r.Body) // PUT of the normalized derivative
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer srv.Close()
+
+			eng, err := engine.Extract(ctx, srv.URL+"/src", srv.URL+"/dst", false, false)
+			if err != nil {
+				t.Fatalf("engine.Extract: %v", err)
+			}
+
 			res, err := client.Extract(ctx, vision.Image{
-				Bytes:           imgBytes,
-				MIME:            mime,
+				Bytes:           eng.Bytes,
+				MIME:            eng.DerivedMIME,
 				ClassifyModel:   classifyModel,
 				ExtractModel:    extractModel,
 				EscalateModel:   escalateModel,

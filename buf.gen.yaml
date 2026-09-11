@@ -1,24 +1,23 @@
-# Generate the Go gRPC server stubs into ./gen from the SHARED contract.
+# Generate the Go gRPC stubs into ./gen from the SHARED contract.
 #
 # image.v1 (and the documents.v1 Anchor it imports) live in the shared
-# buf.build/ogen-app/proto module (CON-220), not in this repo. `make proto`
-# runs `buf generate` against a PINNED version of that module. Because
-# image.v1.Block.anchor is a documents.v1.Anchor, `buf generate` pulls BOTH
-# image.v1 and documents.v1 — the stubs land at gen/image/v1/ and
-# gen/documents/v1/. Managed mode's go_package_prefix override keeps the import
-# path github.com/ogen-app/image-service/gen/... unchanged.
-version: v2
-inputs:
-  - module: buf.build/ogen-app/proto:v1.3.0 # pin an exact version
+# buf.build/ogen-app/proto module (CON-220), not in this repo. `make proto` runs
+# `buf generate <module>:<version>` (the module is passed on the command line —
+# see the Makefile). Because image.v1.Block.anchor is a documents.v1.Anchor, buf
+# pulls BOTH image.v1 and documents.v1, so the stubs land at gen/image/v1/ and
+# gen/documents/v1/. Managed mode's go_package_prefix keeps the import path
+# github.com/ogen-app/image-service/gen/... Local (not remote) plugins, pinned in
+# CI to protoc-gen-go@v1.36.11 / protoc-gen-go-grpc@v1.6.2, so regeneration is
+# byte-identical and the CI drift gate is meaningful.
+version: v1
 managed:
   enabled: true
-  override:
-    - file_option: go_package_prefix
-      value: github.com/ogen-app/image-service/gen
+  go_package_prefix:
+    default: github.com/ogen-app/image-service/gen
 plugins:
-  - remote: buf.build/protocolbuffers/go
+  - plugin: go
     out: gen
     opt: paths=source_relative
-  - remote: buf.build/grpc/go
+  - plugin: go-grpc
     out: gen
     opt: paths=source_relative
