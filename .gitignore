@@ -1,0 +1,12 @@
+# Build output
+/image-service
+/dist/
+
+# Go test/coverage
+*.out
+coverage.*
+
+# Editor/OS
+.DS_Store
+.idea/
+.vscode/
