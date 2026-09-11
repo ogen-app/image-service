@@ -1,0 +1,171 @@
+name: ci
+
+# Lint + test on every PR and push. The image is built and pushed only after all
+# test jobs (go, proto, eval) pass, and only on main or version tags — never on
+# PRs. Requires repo secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (a Docker Hub
+# access token).
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+# Least-privilege default: the workflow token gets read-only repo access; no job
+# here needs write (the image publish authenticates to Docker Hub with its own
+# token, not GITHUB_TOKEN). Grant extra scopes per-job only if ever required.
+permissions:
+  contents: read
+
+# Serialize runs per ref so a slower older push to main can't finish last and
+# republish `latest` over a newer commit's image; a newer run cancels the
+# superseded one. Distinct tags/branches have distinct refs, so releases don't
+# cancel each other.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The engine links libvips via CGO; install the dev package so `go vet` and
+      # the tests compile and run instead of failing to build.
+      - name: Install libvips (CGO backend)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libvips-dev pkg-config
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l $(git ls-files '*.go' | grep -v '^gen/'))"
+          if [ -n "$unformatted" ]; then echo "needs gofmt:"; echo "$unformatted"; exit 1; fi
+
+      # All application logging goes through log/slog (CON-107). Boot log.Fatal*
+      # in cmd/image-service is allowed; log.Print/Printf/Println calls are not.
+      # Anchored on the call paren so prose mentions of the funcs don't trip it.
+      - name: forbid stdlib log.Print calls
+        run: |
+          if git grep -nE 'log\.Print(ln|f)?\(' -- cmd internal; then
+            echo "::error::use log/slog, not the stdlib log.Print/Printf/Println functions"
+            exit 1
+          fi
+
+      - name: vet
+        run: go vet ./...
+        env:
+          CGO_ENABLED: "1"
+
+      - name: test
+        run: go test -race ./...
+        env:
+          CGO_ENABLED: "1"
+
+  proto:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1
+
+      # image.v1 lives in the SHARED buf.build/ogen-app/proto module (CON-220),
+      # not in this repo. Verify the committed stubs under gen/ are in sync with
+      # the pinned contract — a drifted checkout means someone bumped
+      # PROTO_VERSION without regenerating. Plugin versions are pinned to those in
+      # the generated headers so regeneration is byte-identical.
+      #
+      # NOTE: this gate only passes once buf.build/ogen-app/proto:v1.3.0 (which
+      # carries image.v1 + the extended documents.v1.Anchor) is published to the
+      # BSR; until then `make proto` cannot resolve the module.
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install protoc-gen-go plugins
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Verify generated code is up to date
+        run: |
+          make proto
+          if [ -n "$(git status --porcelain -- gen/)" ]; then
+            echo "::error::gen/ is out of date — run 'make proto' and commit the result"
+            git status --porcelain -- gen/
+            git diff -- gen/
+            exit 1
+          fi
+
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install libvips (CGO backend)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libvips-dev pkg-config
+      # The golden eval set gates model/prompt changes (NFR). It runs against the
+      # real Gemini model, so it needs GEMINI_API_KEY; when the secret is absent
+      # (e.g. a fork PR) the harness SKIPS rather than failing, so the gate is
+      # advisory on forks and enforced on the canonical repo.
+      - name: eval gate
+        run: go test -race -tags=eval ./eval/...
+        env:
+          CGO_ENABLED: "1"
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+  build-push:
+    runs-on: ubuntu-latest
+    # Gate the image on tests: this job won't start until go, proto, and eval
+    # succeed (needs implies success). Skip on PRs and on forks.
+    needs: [go, proto, eval]
+    if: github.event_name == 'push' && github.repository_owner == 'ogen-app'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/image-service
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build and push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

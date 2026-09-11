@@ -1,0 +1,74 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit configuration for ogen-app/image-service (CON-281). The default
+# branch carries this file so it applies as the base config on every PR.
+language: en-US
+early_access: false
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  changed_files_summary: true
+  sequence_diagrams: true
+
+  # Generated protobuf stubs and build output are noise in review.
+  path_filters:
+    - "!gen/**"
+    - "!**/*.pb.go"
+    - "!go.sum"
+
+  # Repo-specific review guidance so CodeRabbit enforces this service's
+  # conventions rather than generic Go advice.
+  path_instructions:
+    - path: "internal/**/*.go"
+      instructions: >-
+        All application logging must go through log/slog (CON-107) — flag any
+        stdlib log.Print/Printf/Println calls (boot-time log.Fatal* in cmd/ is
+        the only exception). Structured logs should carry a "component" key.
+    - path: "internal/server/**/*.go"
+      instructions: >-
+        gRPC error mapping is load-bearing. Terminal content verdicts
+        (unsupported/vector-SVG/corrupt/oversize) must return
+        codes.InvalidArgument (no client retry). A presigned-transfer failure
+        must return codes.Internal (ErrFetch, transient). Gemini unavailable/5xx
+        must be codes.Unavailable, rate-limit codes.ResourceExhausted, deadlines
+        codes.DeadlineExceeded — all transient so the API retries. Flag any
+        mapping that could reject a valid upload on a transient fault, or that
+        hardcodes a Gemini model (model ids must come from the request/config,
+        never compiled in).
+    - path: "internal/imgengine/**/*.go"
+      instructions: >-
+        This package links libvips (CGO). Verify the header-first bomb guard runs
+        BEFORE any pixel decode (dimensions read from the header, rejected against
+        MaxPixels), the encoded-byte guard bounds the fetched payload, SVG/vector
+        is rejected terminally, EXIF/geo is stripped on every derivative, the
+        SHA-256 checksum is over the ORIGINAL bytes, and the PrepareAttachment
+        path preserves pixels (no resize / lossy re-encode). Presigned URL query
+        strings must be redacted from error messages.
+    - path: "internal/vision/**/*.go"
+      instructions: >-
+        This package calls Gemini vision. The model id must come from the
+        caller, never compiled in. Classify uses low media_resolution, extract
+        uses high. Escalation runs at most ONCE per Extract (on classify OR
+        extract, whichever was unsure) and records the outcome regardless.
+        Per-call TokenUsage (model, step, input, output) must be returned for
+        every model call so ogen can price it. A late-step failure
+        (describe/alt-text) must not fail the whole Extract — leave the *_ok flag
+        false and return the partial result.
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+    base_branches:
+      - main
+
+  tools:
+    golangci-lint:
+      enabled: true
+
+chat:
+  auto_reply: true
