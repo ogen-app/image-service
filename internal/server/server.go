@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"google.golang.org/genai"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -254,17 +255,39 @@ func (s *Server) GenerateAltText(ctx context.Context, req *imagev1.GenerateAltTe
 
 // ─── Error mapping ─────────────────────────────────────────────────────────────
 
+// Machine-readable reject reasons carried on a terminal InvalidArgument as a
+// google.rpc.ErrorInfo detail (CON-281). The values mirror the image.v1
+// RejectedCode enum NAMES; they are kept as string constants — not the generated
+// enum — so the service is not blocked on the proto tag bump that adds
+// RejectedCode. The names are the contract ogen maps against; the human sentence
+// (the status message) rides alongside as the fallback.
+const (
+	rejectDomain          = "image.v1"
+	reasonUnsupportedType = "REJECTED_CODE_UNSUPPORTED_MEDIA_TYPE"
+	reasonVector          = "REJECTED_CODE_VECTOR"
+	reasonTooLarge        = "REJECTED_CODE_TOO_LARGE"
+	reasonDimensions      = "REJECTED_CODE_DIMENSIONS_EXCEEDED"
+	reasonCorrupt         = "REJECTED_CODE_CORRUPT"
+)
+
 // mapEngineErr classifies an imgengine error into a gRPC status. Terminal content
-// verdicts (unsupported / vector / corrupt / oversize) are InvalidArgument so the
-// client does not retry. A presigned-transfer failure is Internal (transient). A
-// context deadline/cancel surfaces as its own code so callers see the timeout.
+// verdicts (unsupported / vector / corrupt / oversize / dimensions) are
+// InvalidArgument so the client does not retry, each tagged with a machine-
+// readable ErrorInfo reason (CON-281) so ogen distinguishes them without parsing
+// the message. A presigned-transfer failure is Internal (transient). A context
+// deadline/cancel surfaces as its own code so callers see the timeout.
 func mapEngineErr(err error) error {
 	switch {
-	case errors.Is(err, imgengine.ErrUnsupported),
-		errors.Is(err, imgengine.ErrVector),
-		errors.Is(err, imgengine.ErrCorrupt),
-		errors.Is(err, imgengine.ErrOversize):
-		return status.Error(codes.InvalidArgument, err.Error())
+	case errors.Is(err, imgengine.ErrVector):
+		return rejectErr(err, reasonVector)
+	case errors.Is(err, imgengine.ErrUnsupported):
+		return rejectErr(err, reasonUnsupportedType)
+	case errors.Is(err, imgengine.ErrCorrupt):
+		return rejectErr(err, reasonCorrupt)
+	case errors.Is(err, imgengine.ErrDimensions):
+		return rejectErr(err, reasonDimensions)
+	case errors.Is(err, imgengine.ErrOversize):
+		return rejectErr(err, reasonTooLarge)
 	case errors.Is(err, imgengine.ErrFetch):
 		return status.Error(codes.Internal, err.Error())
 	case errors.Is(err, context.DeadlineExceeded):
@@ -274,6 +297,21 @@ func mapEngineErr(err error) error {
 	default:
 		return status.Error(codes.Internal, err.Error())
 	}
+}
+
+// rejectErr builds a terminal InvalidArgument carrying a machine-readable reason
+// as a google.rpc.ErrorInfo detail beside the human message. If attaching the
+// detail somehow fails, the plain status is returned so the reject is never lost
+// (the client still gets InvalidArgument + the message).
+func rejectErr(err error, reason string) error {
+	st := status.New(codes.InvalidArgument, err.Error())
+	if withDetail, derr := st.WithDetails(&errdetails.ErrorInfo{
+		Domain: rejectDomain,
+		Reason: reason,
+	}); derr == nil {
+		return withDetail.Err()
+	}
+	return st.Err()
 }
 
 // mapVisionErr classifies a Gemini vision error. An unconfigured key is
