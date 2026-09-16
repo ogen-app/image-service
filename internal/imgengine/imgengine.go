@@ -88,9 +88,16 @@ var ErrVector = errors.New("imgengine: vector images (svg) are not supported")
 // malformed, or not an image at all). Terminal.
 var ErrCorrupt = errors.New("imgengine: corrupt or undecodable image")
 
-// ErrOversize marks input that exceeds the pixel-area (MaxPixels) or encoded-byte
-// (MaxUploadBytes) bomb guard. Terminal — the client must shrink it, not retry.
+// ErrOversize marks input whose ENCODED byte size exceeds the MaxUploadBytes
+// bomb guard. Terminal — the client must shrink it, not retry. (Pixel-area
+// overflow is ErrDimensions, so the two map to distinct reject codes.)
 var ErrOversize = errors.New("imgengine: image exceeds size limits")
+
+// ErrDimensions marks input whose PIXEL AREA (width*height) exceeds the MaxPixels
+// bomb guard — checked header-first, before any pixel buffer is decoded. Terminal.
+// Split from ErrOversize so a "too many pixels" reject carries a distinct code
+// from a "too many bytes" one (CON-281).
+var ErrDimensions = errors.New("imgengine: image dimensions exceed limits")
 
 // ErrFetch marks a failure fetching the source or PUTting the derivative over
 // HTTP. NOT a content verdict — transient, so the server maps it to Internal and
@@ -410,7 +417,7 @@ func (e *Engine) loadAndGuard(orig []byte) (Meta, *vips.ImageRef, error) {
 	}
 	if px := int64(w) * int64(h); px > e.maxPixels {
 		return Meta{}, nil, fmt.Errorf("%w: %d pixels (%dx%d) exceeds %d",
-			ErrOversize, px, w, h, e.maxPixels)
+			ErrDimensions, px, w, h, e.maxPixels)
 	}
 
 	// Header is safe; now decode via libvips. AutoRotate at load applies the EXIF
@@ -433,7 +440,7 @@ func (e *Engine) loadAndGuard(orig []byte) (Meta, *vips.ImageRef, error) {
 	// and close the ref if it lied.
 	if px := int64(ref.Width()) * int64(ref.Height()); px > e.maxPixels {
 		ref.Close()
-		return Meta{}, nil, fmt.Errorf("%w: %d decoded pixels exceeds %d", ErrOversize, px, e.maxPixels)
+		return Meta{}, nil, fmt.Errorf("%w: %d decoded pixels exceeds %d", ErrDimensions, px, e.maxPixels)
 	}
 
 	frames := ref.Pages()
