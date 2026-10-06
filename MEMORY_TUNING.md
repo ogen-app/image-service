@@ -34,6 +34,27 @@ burst plateau back toward baseline, so most billing samples catch the low idle
 number. libvips decodes leave reclaimable native pages behind, so this matters
 even more here than for a pure-Go service. Keep it on.
 
+### Native heap (libvips) — `malloc_trim` + `MALLOC_ARENA_MAX=2`
+
+`debug.FreeOSMemory` only returns the **Go** heap. libvips allocates pixel
+buffers through **glibc malloc**, which keeps freed chunks resident in its arenas
+— one per OS thread that ever called into C, up to 8×cores. On a many-core
+Railway host that is dozens of arenas, each holding a burst's worth of freed
+buffers, so RSS steps *up* after every burst and never comes down (e.g. 60 MB
+boot → 140 MB after the first burst → 270 MB after the second).
+
+Two fixes, both always on:
+
+- The idle scavenge also calls `malloc_trim(0)` (`internal/imgengine/nativetrim_linux.go`),
+  which madvises free pages in every arena back to the kernel.
+- The Docker image sets `MALLOC_ARENA_MAX=2`, so fragmentation is spread over 2
+  arenas rather than dozens. The cost is a little allocator contention under
+  concurrent decodes — negligible next to the decode itself at `WORKERS<=4`.
+
+If the plateau persists after these, the next step is jemalloc
+(`apt-get install libjemalloc2` + `LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2`),
+which libvips recommends on glibc; drop `MALLOC_ARENA_MAX` and the trim is then a no-op.
+
 ### `GC_PERCENT=50` — minor lever, don't overthink
 
 GOGC only affects the Go heap high-water mark during activity. This service's Go
@@ -80,5 +101,6 @@ libpdfium.
 
 Run a couple of Extract/PrepareAttachment calls and confirm memory returns toward
 baseline (reuse) rather than climbing across bursts (a real leak). At
-`LOG_LEVEL=debug`, each scavenge logs `component=imgengine.scavenge`; boot logs
+`LOG_LEVEL=debug`, each scavenge logs `component=imgengine.scavenge` with
+`rss_before_bytes` / `rss_after_bytes`, so you can see exactly what it returned; boot logs
 the derived `GOMEMLIMIT` under `component=runtimetune`.

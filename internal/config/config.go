@@ -87,7 +87,7 @@ type Config struct {
 	// native (off-heap) memory GOMEMLIMIT doesn't govern, so leave headroom.
 	MemoryLimitRatio float64 `envconfig:"IMAGE_SERVICE_MEMORY_LIMIT_RATIO" default:"0.8"`
 
-	// ScavengeOnIdle returns freed memory to the OS (debug.FreeOSMemory) once the
+	// ScavengeOnIdle returns freed memory to the OS (Go heap + glibc malloc_trim) once the
 	// worker pool drains to idle after a burst, so container RSS tracks real usage
 	// instead of holding a high-water mark. Runs off the request path.
 	ScavengeOnIdle bool `envconfig:"IMAGE_SERVICE_SCAVENGE_ON_IDLE" default:"true"`
