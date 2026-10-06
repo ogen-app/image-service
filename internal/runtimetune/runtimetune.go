@@ -3,7 +3,7 @@
 // (GOGC) and derives a soft memory limit (GOMEMLIMIT) from the cgroup memory
 // limit — keeping the heap bounded and container RSS predictable across the
 // bursty libvips decode/encode workload. It complements the engine's idle
-// scavenge (debug.FreeOSMemory), which returns reclaimed pages to the OS after a
+// scavenge (Go + glibc heap trim), which returns reclaimed pages to the OS after a
 // burst.
 //
 // Note: libvips also allocates NATIVE (off-heap) memory that GOMEMLIMIT does not

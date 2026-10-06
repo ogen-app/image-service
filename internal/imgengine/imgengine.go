@@ -140,7 +140,7 @@ type Engine struct {
 	// scavengeOnIdle returns freed memory to the OS once the pool drains after a
 	// burst; active tracks in-flight work so the drain-to-idle edge can be
 	// detected, and scavenging collapses overlapping triggers into one. scavengeFn
-	// is the actual reclaim (debug.FreeOSMemory), injectable for tests.
+	// is the actual reclaim (reclaimMemory), injectable for tests.
 	scavengeOnIdle bool
 	scavengeFn     func()
 	active         atomic.Int64
@@ -186,7 +186,7 @@ func New(cfg Config) (*Engine, error) {
 		httpClient:      &http.Client{Timeout: orDuration(cfg.HTTPTimeout, defaultHTTPTimeout)},
 		sem:             make(chan struct{}, workers),
 		scavengeOnIdle:  cfg.ScavengeOnIdle,
-		scavengeFn:      debug.FreeOSMemory,
+		scavengeFn:      reclaimMemory,
 	}, nil
 }
 
@@ -646,9 +646,19 @@ func (e *Engine) scavenge() {
 	}
 	go func() {
 		defer e.scavenging.Store(false)
+		before := residentBytes()
 		e.scavengeFn()
-		slog.Debug("returned freed memory to OS after idle", "component", "imgengine.scavenge")
+		slog.Debug("returned freed memory to OS after idle", "component", "imgengine.scavenge",
+			"rss_before_bytes", before, "rss_after_bytes", residentBytes())
 	}()
+}
+
+// reclaimMemory returns both heaps to the OS: the Go heap (debug.FreeOSMemory)
+// and libvips' native glibc heap (trimNativeHeap). The Go half alone leaves the
+// libvips pixel buffers' pages resident, which is most of the burst footprint.
+func reclaimMemory() {
+	debug.FreeOSMemory()
+	trimNativeHeap()
 }
 
 // ─── Header-first format detection + dimension probe ──────────────────────────

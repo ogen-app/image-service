@@ -49,6 +49,11 @@ COPY --from=build /image-service /usr/local/bin/image-service
 USER app
 
 ENV IMAGE_SERVICE_LISTEN=":50051"
+# glibc gives every thread that calls into libvips its own malloc arena (up to
+# 8×cores — dozens on Railway's large hosts), and each arena keeps its freed
+# pixel buffers resident. Capping at 2 stops RSS ratcheting up across bursts;
+# the engine's idle malloc_trim then returns the remainder. See MEMORY_TUNING.md.
+ENV MALLOC_ARENA_MAX=2
 EXPOSE 50051
 
 # Private-network only — orchestrators probe gRPC health via grpc_health_probe.
