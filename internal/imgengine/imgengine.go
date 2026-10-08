@@ -386,6 +386,59 @@ func (e *Engine) PrepareAttachment(ctx context.Context, sourceURL, destPutURL st
 	return &PrepareResult{Meta: meta, DerivedMIME: derivedMIME, Bytes: derived}, nil
 }
 
+// ─── RenderPreview path ───────────────────────────────────────────────────────
+
+// PreviewResult is RenderPreview's output: the written preview's MIME, pixel
+// size and encoded byte size.
+type PreviewResult struct {
+	MIME      string // "image/jpeg" or "image/png"
+	Width     int
+	Height    int
+	SizeBytes int64
+}
+
+// RenderPreview fetches the image at sourceURL, validates + bomb-guards it,
+// downscales it so its longest edge is at most maxLongEdge (never upscaling;
+// <=0 uses the Extract derivative cap), and PUTs a metadata-free JPEG (opaque) or
+// PNG (alpha) to destPutURL. An animated source is decoded as its first frame
+// only, so the preview is always a still.
+func (e *Engine) RenderPreview(ctx context.Context, sourceURL, destPutURL string, maxLongEdge int) (*PreviewResult, error) {
+	if strings.TrimSpace(sourceURL) == "" {
+		return nil, fmt.Errorf("%w: empty source url", ErrCorrupt)
+	}
+	if maxLongEdge <= 0 {
+		maxLongEdge = e.downscaleMaxDim
+	}
+
+	if err := e.acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer e.releaseWorker()
+
+	orig, err := e.fetch(ctx, sourceURL)
+	if err != nil {
+		return nil, err
+	}
+
+	_, ref, err := e.loadAndGuard(orig)
+	if err != nil {
+		return nil, err
+	}
+	defer ref.Close()
+
+	if err := downscaleToMaxDim(ref, maxLongEdge); err != nil {
+		return nil, fmt.Errorf("%w: downscale: %v", ErrCorrupt, err)
+	}
+	derived, derivedMIME, w, h, err := e.encodeDerivative(ref)
+	if err != nil {
+		return nil, err
+	}
+	if err := e.put(ctx, destPutURL, derived, derivedMIME); err != nil {
+		return nil, err
+	}
+	return &PreviewResult{MIME: derivedMIME, Width: w, Height: h, SizeBytes: int64(len(derived))}, nil
+}
+
 // ─── Load, validate, bomb-guard ───────────────────────────────────────────────
 
 // loadAndGuard sniffs the format, enforces the vector reject and both bomb

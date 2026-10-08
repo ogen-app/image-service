@@ -82,6 +82,77 @@ func (Shape) EnumDescriptor() ([]byte, []int) {
 	return file_image_v1_image_proto_rawDescGZIP(), []int{0}
 }
 
+// RejectedCode is the stable, machine-readable vocabulary for a terminal reject
+// (CON-281). It names the KIND of reject so the Ogen API can map it to its own
+// upload code and the front-end can word each case distinctly (retry vs
+// never-works) without parsing prose. A consumer that does not recognise a value
+// falls back to the human sentence, so new codes are additive.
+//
+// DELIVERY: image-service surfaces terminal verdicts as gRPC *status errors*
+// (InvalidArgument), not populated responses, so the code travels as a
+// google.rpc.ErrorInfo detail on the error — Domain "image.v1", Reason set to
+// the enum value's name (e.g. "REJECTED_CODE_VECTOR"). The rejected_code /
+// rejected_reason RESPONSE fields carry the same signal only on the rare
+// non-error ("soft") reject path, mirroring the pre-existing rejected_reason
+// string; both stay unset (UNSPECIFIED) on the success path.
+type RejectedCode int32
+
+const (
+	RejectedCode_REJECTED_CODE_UNSPECIFIED            RejectedCode = 0 // not a reject, or a service predating this field
+	RejectedCode_REJECTED_CODE_UNSUPPORTED_MEDIA_TYPE RejectedCode = 1 // a container/codec the service cannot decode
+	RejectedCode_REJECTED_CODE_VECTOR                 RejectedCode = 2 // SVG / vector artwork — raster only
+	RejectedCode_REJECTED_CODE_TOO_LARGE              RejectedCode = 3 // over the max file-size ceiling
+	RejectedCode_REJECTED_CODE_DIMENSIONS_EXCEEDED    RejectedCode = 4 // over the pixel-area / dimension ceiling
+	RejectedCode_REJECTED_CODE_CORRUPT                RejectedCode = 5 // truncated / undecodable / zero-length
+)
+
+// Enum value maps for RejectedCode.
+var (
+	RejectedCode_name = map[int32]string{
+		0: "REJECTED_CODE_UNSPECIFIED",
+		1: "REJECTED_CODE_UNSUPPORTED_MEDIA_TYPE",
+		2: "REJECTED_CODE_VECTOR",
+		3: "REJECTED_CODE_TOO_LARGE",
+		4: "REJECTED_CODE_DIMENSIONS_EXCEEDED",
+		5: "REJECTED_CODE_CORRUPT",
+	}
+	RejectedCode_value = map[string]int32{
+		"REJECTED_CODE_UNSPECIFIED":            0,
+		"REJECTED_CODE_UNSUPPORTED_MEDIA_TYPE": 1,
+		"REJECTED_CODE_VECTOR":                 2,
+		"REJECTED_CODE_TOO_LARGE":              3,
+		"REJECTED_CODE_DIMENSIONS_EXCEEDED":    4,
+		"REJECTED_CODE_CORRUPT":                5,
+	}
+)
+
+func (x RejectedCode) Enum() *RejectedCode {
+	p := new(RejectedCode)
+	*p = x
+	return p
+}
+
+func (x RejectedCode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RejectedCode) Descriptor() protoreflect.EnumDescriptor {
+	return file_image_v1_image_proto_enumTypes[1].Descriptor()
+}
+
+func (RejectedCode) Type() protoreflect.EnumType {
+	return &file_image_v1_image_proto_enumTypes[1]
+}
+
+func (x RejectedCode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RejectedCode.Descriptor instead.
+func (RejectedCode) EnumDescriptor() ([]byte, []int) {
+	return file_image_v1_image_proto_rawDescGZIP(), []int{1}
+}
+
 type ExtractRequest struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	SourceUrl        string                 `protobuf:"bytes,1,opt,name=source_url,json=sourceUrl,proto3" json:"source_url,omitempty"`                       // presigned GET (original or a prior normalized derivative)
@@ -205,8 +276,9 @@ type ExtractResponse struct {
 	DescriptionOk      bool                   `protobuf:"varint,9,opt,name=description_ok,json=descriptionOk,proto3" json:"description_ok,omitempty"`
 	ExtractionOk       bool                   `protobuf:"varint,10,opt,name=extraction_ok,json=extractionOk,proto3" json:"extraction_ok,omitempty"`
 	Truncated          bool                   `protobuf:"varint,11,opt,name=truncated,proto3" json:"truncated,omitempty"`
-	Usage              []*TokenUsage          `protobuf:"bytes,12,rep,name=usage,proto3" json:"usage,omitempty"`                                         // per-call Gemini token usage → ogen prices it
-	RejectedReason     string                 `protobuf:"bytes,13,opt,name=rejected_reason,json=rejectedReason,proto3" json:"rejected_reason,omitempty"` // set alongside a terminal InvalidArgument
+	Usage              []*TokenUsage          `protobuf:"bytes,12,rep,name=usage,proto3" json:"usage,omitempty"`                                                               // per-call Gemini token usage → ogen prices it
+	RejectedReason     string                 `protobuf:"bytes,13,opt,name=rejected_reason,json=rejectedReason,proto3" json:"rejected_reason,omitempty"`                       // set alongside a terminal InvalidArgument
+	RejectedCode       RejectedCode           `protobuf:"varint,14,opt,name=rejected_code,json=rejectedCode,proto3,enum=image.v1.RejectedCode" json:"rejected_code,omitempty"` // machine-readable companion to rejected_reason
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -332,6 +404,13 @@ func (x *ExtractResponse) GetRejectedReason() string {
 	return ""
 }
 
+func (x *ExtractResponse) GetRejectedCode() RejectedCode {
+	if x != nil {
+		return x.RejectedCode
+	}
+	return RejectedCode_REJECTED_CODE_UNSPECIFIED
+}
+
 type PrepareAttachmentRequest struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	SourceUrl       string                 `protobuf:"bytes,1,opt,name=source_url,json=sourceUrl,proto3" json:"source_url,omitempty"`              // presigned GET (uploaded original)
@@ -435,7 +514,8 @@ type PrepareAttachmentResponse struct {
 	ChecksumSha256 string                 `protobuf:"bytes,7,opt,name=checksum_sha256,json=checksumSha256,proto3" json:"checksum_sha256,omitempty"` // of the ORIGINAL bytes (dedupe)
 	AltText        string                 `protobuf:"bytes,8,opt,name=alt_text,json=altText,proto3" json:"alt_text,omitempty"`                      // empty when want_alt_text=false
 	Usage          []*TokenUsage          `protobuf:"bytes,9,rep,name=usage,proto3" json:"usage,omitempty"`
-	RejectedReason string                 `protobuf:"bytes,10,opt,name=rejected_reason,json=rejectedReason,proto3" json:"rejected_reason,omitempty"` // unsupported/vector/oversize/corrupt → terminal
+	RejectedReason string                 `protobuf:"bytes,10,opt,name=rejected_reason,json=rejectedReason,proto3" json:"rejected_reason,omitempty"`                       // unsupported/vector/oversize/corrupt → terminal
+	RejectedCode   RejectedCode           `protobuf:"varint,11,opt,name=rejected_code,json=rejectedCode,proto3,enum=image.v1.RejectedCode" json:"rejected_code,omitempty"` // machine-readable companion to rejected_reason
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -538,6 +618,13 @@ func (x *PrepareAttachmentResponse) GetRejectedReason() string {
 		return x.RejectedReason
 	}
 	return ""
+}
+
+func (x *PrepareAttachmentResponse) GetRejectedCode() RejectedCode {
+	if x != nil {
+		return x.RejectedCode
+	}
+	return RejectedCode_REJECTED_CODE_UNSPECIFIED
 }
 
 type GenerateAltTextRequest struct {
@@ -652,6 +739,134 @@ func (x *GenerateAltTextResponse) GetUsage() []*TokenUsage {
 	return nil
 }
 
+type RenderPreviewRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SourceUrl     string                 `protobuf:"bytes,1,opt,name=source_url,json=sourceUrl,proto3" json:"source_url,omitempty"`          // presigned GET (a stored image or video poster)
+	DestPutUrl    string                 `protobuf:"bytes,2,opt,name=dest_put_url,json=destPutUrl,proto3" json:"dest_put_url,omitempty"`     // presigned PUT, not bound to a Content-Type
+	MaxLongEdge   int32                  `protobuf:"varint,3,opt,name=max_long_edge,json=maxLongEdge,proto3" json:"max_long_edge,omitempty"` // cap on the longer side in px (0 -> 4096)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RenderPreviewRequest) Reset() {
+	*x = RenderPreviewRequest{}
+	mi := &file_image_v1_image_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RenderPreviewRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenderPreviewRequest) ProtoMessage() {}
+
+func (x *RenderPreviewRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_image_v1_image_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenderPreviewRequest.ProtoReflect.Descriptor instead.
+func (*RenderPreviewRequest) Descriptor() ([]byte, []int) {
+	return file_image_v1_image_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *RenderPreviewRequest) GetSourceUrl() string {
+	if x != nil {
+		return x.SourceUrl
+	}
+	return ""
+}
+
+func (x *RenderPreviewRequest) GetDestPutUrl() string {
+	if x != nil {
+		return x.DestPutUrl
+	}
+	return ""
+}
+
+func (x *RenderPreviewRequest) GetMaxLongEdge() int32 {
+	if x != nil {
+		return x.MaxLongEdge
+	}
+	return 0
+}
+
+type RenderPreviewResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Mime          string                 `protobuf:"bytes,1,opt,name=mime,proto3" json:"mime,omitempty"`    // "image/jpeg" or "image/png"
+	Width         int32                  `protobuf:"varint,2,opt,name=width,proto3" json:"width,omitempty"` // of the written preview
+	Height        int32                  `protobuf:"varint,3,opt,name=height,proto3" json:"height,omitempty"`
+	SizeBytes     int64                  `protobuf:"varint,4,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RenderPreviewResponse) Reset() {
+	*x = RenderPreviewResponse{}
+	mi := &file_image_v1_image_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RenderPreviewResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenderPreviewResponse) ProtoMessage() {}
+
+func (x *RenderPreviewResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_image_v1_image_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenderPreviewResponse.ProtoReflect.Descriptor instead.
+func (*RenderPreviewResponse) Descriptor() ([]byte, []int) {
+	return file_image_v1_image_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *RenderPreviewResponse) GetMime() string {
+	if x != nil {
+		return x.Mime
+	}
+	return ""
+}
+
+func (x *RenderPreviewResponse) GetWidth() int32 {
+	if x != nil {
+		return x.Width
+	}
+	return 0
+}
+
+func (x *RenderPreviewResponse) GetHeight() int32 {
+	if x != nil {
+		return x.Height
+	}
+	return 0
+}
+
+func (x *RenderPreviewResponse) GetSizeBytes() int64 {
+	if x != nil {
+		return x.SizeBytes
+	}
+	return 0
+}
+
 // TokenUsage is one Gemini vision call's token count, priced by ogen via the
 // existing gemini vendor (CON-86). step names the pipeline stage
 // (vision_classify / vision_extract / describe / alt_text).
@@ -667,7 +882,7 @@ type TokenUsage struct {
 
 func (x *TokenUsage) Reset() {
 	*x = TokenUsage{}
-	mi := &file_image_v1_image_proto_msgTypes[6]
+	mi := &file_image_v1_image_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -679,7 +894,7 @@ func (x *TokenUsage) String() string {
 func (*TokenUsage) ProtoMessage() {}
 
 func (x *TokenUsage) ProtoReflect() protoreflect.Message {
-	mi := &file_image_v1_image_proto_msgTypes[6]
+	mi := &file_image_v1_image_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -692,7 +907,7 @@ func (x *TokenUsage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TokenUsage.ProtoReflect.Descriptor instead.
 func (*TokenUsage) Descriptor() ([]byte, []int) {
-	return file_image_v1_image_proto_rawDescGZIP(), []int{6}
+	return file_image_v1_image_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *TokenUsage) GetModel() string {
@@ -736,7 +951,7 @@ type NormalizedMeta struct {
 
 func (x *NormalizedMeta) Reset() {
 	*x = NormalizedMeta{}
-	mi := &file_image_v1_image_proto_msgTypes[7]
+	mi := &file_image_v1_image_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -748,7 +963,7 @@ func (x *NormalizedMeta) String() string {
 func (*NormalizedMeta) ProtoMessage() {}
 
 func (x *NormalizedMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_image_v1_image_proto_msgTypes[7]
+	mi := &file_image_v1_image_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -761,7 +976,7 @@ func (x *NormalizedMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NormalizedMeta.ProtoReflect.Descriptor instead.
 func (*NormalizedMeta) Descriptor() ([]byte, []int) {
-	return file_image_v1_image_proto_rawDescGZIP(), []int{7}
+	return file_image_v1_image_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *NormalizedMeta) GetMime() string {
@@ -819,7 +1034,7 @@ type Block struct {
 
 func (x *Block) Reset() {
 	*x = Block{}
-	mi := &file_image_v1_image_proto_msgTypes[8]
+	mi := &file_image_v1_image_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -831,7 +1046,7 @@ func (x *Block) String() string {
 func (*Block) ProtoMessage() {}
 
 func (x *Block) ProtoReflect() protoreflect.Message {
-	mi := &file_image_v1_image_proto_msgTypes[8]
+	mi := &file_image_v1_image_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -844,7 +1059,7 @@ func (x *Block) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Block.ProtoReflect.Descriptor instead.
 func (*Block) Descriptor() ([]byte, []int) {
-	return file_image_v1_image_proto_rawDescGZIP(), []int{8}
+	return file_image_v1_image_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *Block) GetKind() string {
@@ -907,7 +1122,7 @@ type Cell struct {
 
 func (x *Cell) Reset() {
 	*x = Cell{}
-	mi := &file_image_v1_image_proto_msgTypes[9]
+	mi := &file_image_v1_image_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -919,7 +1134,7 @@ func (x *Cell) String() string {
 func (*Cell) ProtoMessage() {}
 
 func (x *Cell) ProtoReflect() protoreflect.Message {
-	mi := &file_image_v1_image_proto_msgTypes[9]
+	mi := &file_image_v1_image_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -932,7 +1147,7 @@ func (x *Cell) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Cell.ProtoReflect.Descriptor instead.
 func (*Cell) Descriptor() ([]byte, []int) {
-	return file_image_v1_image_proto_rawDescGZIP(), []int{9}
+	return file_image_v1_image_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Cell) GetRow() int32 {
@@ -972,7 +1187,7 @@ const file_image_v1_image_proto_rawDesc = "" +
 	"\rextract_model\x18\x06 \x01(\tR\fextractModel\x12%\n" +
 	"\x0eescalate_model\x18\a \x01(\tR\rescalateModel\x12+\n" +
 	"\x12alt_text_max_chars\x18\b \x01(\x05R\x0faltTextMaxChars\x121\n" +
-	"\x14confidence_threshold\x18\t \x01(\x02R\x13confidenceThreshold\"\x97\x04\n" +
+	"\x14confidence_threshold\x18\t \x01(\x02R\x13confidenceThreshold\"\xd4\x04\n" +
 	"\x0fExtractResponse\x12%\n" +
 	"\x05shape\x18\x01 \x01(\x0e2\x0f.image.v1.ShapeR\x05shape\x12/\n" +
 	"\x13classify_confidence\x18\x02 \x01(\x02R\x12classifyConfidence\x12'\n" +
@@ -989,7 +1204,8 @@ const file_image_v1_image_proto_rawDesc = "" +
 	" \x01(\bR\fextractionOk\x12\x1c\n" +
 	"\ttruncated\x18\v \x01(\bR\ttruncated\x12*\n" +
 	"\x05usage\x18\f \x03(\v2\x14.image.v1.TokenUsageR\x05usage\x12'\n" +
-	"\x0frejected_reason\x18\r \x01(\tR\x0erejectedReason\"\x95\x02\n" +
+	"\x0frejected_reason\x18\r \x01(\tR\x0erejectedReason\x12;\n" +
+	"\rrejected_code\x18\x0e \x01(\x0e2\x16.image.v1.RejectedCodeR\frejectedCode\"\x95\x02\n" +
 	"\x18PrepareAttachmentRequest\x12\x1d\n" +
 	"\n" +
 	"source_url\x18\x01 \x01(\tR\tsourceUrl\x12 \n" +
@@ -999,7 +1215,7 @@ const file_image_v1_image_proto_rawDesc = "" +
 	"\rwant_alt_text\x18\x04 \x01(\bR\vwantAltText\x12+\n" +
 	"\x12alt_text_max_chars\x18\x05 \x01(\x05R\x0faltTextMaxChars\x12$\n" +
 	"\x0ealt_text_model\x18\x06 \x01(\tR\faltTextModel\x12\x1a\n" +
-	"\bfilename\x18\a \x01(\tR\bfilename\"\xd7\x02\n" +
+	"\bfilename\x18\a \x01(\tR\bfilename\"\x94\x03\n" +
 	"\x19PrepareAttachmentResponse\x12\x12\n" +
 	"\x04mime\x18\x01 \x01(\tR\x04mime\x12\x1d\n" +
 	"\n" +
@@ -1014,7 +1230,8 @@ const file_image_v1_image_proto_rawDesc = "" +
 	"\balt_text\x18\b \x01(\tR\aaltText\x12*\n" +
 	"\x05usage\x18\t \x03(\v2\x14.image.v1.TokenUsageR\x05usage\x12'\n" +
 	"\x0frejected_reason\x18\n" +
-	" \x01(\tR\x0erejectedReason\"j\n" +
+	" \x01(\tR\x0erejectedReason\x12;\n" +
+	"\rrejected_code\x18\v \x01(\x0e2\x16.image.v1.RejectedCodeR\frejectedCode\"j\n" +
 	"\x16GenerateAltTextRequest\x12\x1d\n" +
 	"\n" +
 	"source_url\x18\x01 \x01(\tR\tsourceUrl\x12\x1b\n" +
@@ -1022,7 +1239,19 @@ const file_image_v1_image_proto_rawDesc = "" +
 	"\x05model\x18\x03 \x01(\tR\x05model\"`\n" +
 	"\x17GenerateAltTextResponse\x12\x19\n" +
 	"\balt_text\x18\x01 \x01(\tR\aaltText\x12*\n" +
-	"\x05usage\x18\x02 \x03(\v2\x14.image.v1.TokenUsageR\x05usage\"d\n" +
+	"\x05usage\x18\x02 \x03(\v2\x14.image.v1.TokenUsageR\x05usage\"{\n" +
+	"\x14RenderPreviewRequest\x12\x1d\n" +
+	"\n" +
+	"source_url\x18\x01 \x01(\tR\tsourceUrl\x12 \n" +
+	"\fdest_put_url\x18\x02 \x01(\tR\n" +
+	"destPutUrl\x12\"\n" +
+	"\rmax_long_edge\x18\x03 \x01(\x05R\vmaxLongEdge\"x\n" +
+	"\x15RenderPreviewResponse\x12\x12\n" +
+	"\x04mime\x18\x01 \x01(\tR\x04mime\x12\x14\n" +
+	"\x05width\x18\x02 \x01(\x05R\x05width\x12\x16\n" +
+	"\x06height\x18\x03 \x01(\x05R\x06height\x12\x1d\n" +
+	"\n" +
+	"size_bytes\x18\x04 \x01(\x03R\tsizeBytes\"d\n" +
 	"\n" +
 	"TokenUsage\x12\x14\n" +
 	"\x05model\x18\x01 \x01(\tR\x05model\x12\x12\n" +
@@ -1056,11 +1285,19 @@ const file_image_v1_image_proto_rawDesc = "" +
 	"\x12SHAPE_CONVERSATION\x10\x02\x12\x15\n" +
 	"\x11SHAPE_SOCIAL_POST\x10\x03\x12\x11\n" +
 	"\rSHAPE_TABULAR\x10\x04\x12\x12\n" +
-	"\x0eSHAPE_CREATIVE\x10\x052\x84\x02\n" +
+	"\x0eSHAPE_CREATIVE\x10\x05*\xd0\x01\n" +
+	"\fRejectedCode\x12\x1d\n" +
+	"\x19REJECTED_CODE_UNSPECIFIED\x10\x00\x12(\n" +
+	"$REJECTED_CODE_UNSUPPORTED_MEDIA_TYPE\x10\x01\x12\x18\n" +
+	"\x14REJECTED_CODE_VECTOR\x10\x02\x12\x1b\n" +
+	"\x17REJECTED_CODE_TOO_LARGE\x10\x03\x12%\n" +
+	"!REJECTED_CODE_DIMENSIONS_EXCEEDED\x10\x04\x12\x19\n" +
+	"\x15REJECTED_CODE_CORRUPT\x10\x052\xd6\x02\n" +
 	"\fImageService\x12>\n" +
 	"\aExtract\x12\x18.image.v1.ExtractRequest\x1a\x19.image.v1.ExtractResponse\x12\\\n" +
 	"\x11PrepareAttachment\x12\".image.v1.PrepareAttachmentRequest\x1a#.image.v1.PrepareAttachmentResponse\x12V\n" +
-	"\x0fGenerateAltText\x12 .image.v1.GenerateAltTextRequest\x1a!.image.v1.GenerateAltTextResponseB\x93\x01\n" +
+	"\x0fGenerateAltText\x12 .image.v1.GenerateAltTextRequest\x1a!.image.v1.GenerateAltTextResponse\x12P\n" +
+	"\rRenderPreview\x12\x1e.image.v1.RenderPreviewRequest\x1a\x1f.image.v1.RenderPreviewResponseB\x93\x01\n" +
 	"\fcom.image.v1B\n" +
 	"ImageProtoP\x01Z6github.com/ogen-app/image-service/gen/image/v1;imagev1\xa2\x02\x03IXX\xaa\x02\bImage.V1\xca\x02\bImage\\V1\xe2\x02\x14Image\\V1\\GPBMetadata\xea\x02\tImage::V1b\x06proto3"
 
@@ -1076,42 +1313,49 @@ func file_image_v1_image_proto_rawDescGZIP() []byte {
 	return file_image_v1_image_proto_rawDescData
 }
 
-var file_image_v1_image_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_image_v1_image_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_image_v1_image_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_image_v1_image_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_image_v1_image_proto_goTypes = []any{
 	(Shape)(0),                        // 0: image.v1.Shape
-	(*ExtractRequest)(nil),            // 1: image.v1.ExtractRequest
-	(*ExtractResponse)(nil),           // 2: image.v1.ExtractResponse
-	(*PrepareAttachmentRequest)(nil),  // 3: image.v1.PrepareAttachmentRequest
-	(*PrepareAttachmentResponse)(nil), // 4: image.v1.PrepareAttachmentResponse
-	(*GenerateAltTextRequest)(nil),    // 5: image.v1.GenerateAltTextRequest
-	(*GenerateAltTextResponse)(nil),   // 6: image.v1.GenerateAltTextResponse
-	(*TokenUsage)(nil),                // 7: image.v1.TokenUsage
-	(*NormalizedMeta)(nil),            // 8: image.v1.NormalizedMeta
-	(*Block)(nil),                     // 9: image.v1.Block
-	(*Cell)(nil),                      // 10: image.v1.Cell
-	(*v1.Anchor)(nil),                 // 11: documents.v1.Anchor
+	(RejectedCode)(0),                 // 1: image.v1.RejectedCode
+	(*ExtractRequest)(nil),            // 2: image.v1.ExtractRequest
+	(*ExtractResponse)(nil),           // 3: image.v1.ExtractResponse
+	(*PrepareAttachmentRequest)(nil),  // 4: image.v1.PrepareAttachmentRequest
+	(*PrepareAttachmentResponse)(nil), // 5: image.v1.PrepareAttachmentResponse
+	(*GenerateAltTextRequest)(nil),    // 6: image.v1.GenerateAltTextRequest
+	(*GenerateAltTextResponse)(nil),   // 7: image.v1.GenerateAltTextResponse
+	(*RenderPreviewRequest)(nil),      // 8: image.v1.RenderPreviewRequest
+	(*RenderPreviewResponse)(nil),     // 9: image.v1.RenderPreviewResponse
+	(*TokenUsage)(nil),                // 10: image.v1.TokenUsage
+	(*NormalizedMeta)(nil),            // 11: image.v1.NormalizedMeta
+	(*Block)(nil),                     // 12: image.v1.Block
+	(*Cell)(nil),                      // 13: image.v1.Cell
+	(*v1.Anchor)(nil),                 // 14: documents.v1.Anchor
 }
 var file_image_v1_image_proto_depIdxs = []int32{
 	0,  // 0: image.v1.ExtractResponse.shape:type_name -> image.v1.Shape
-	9,  // 1: image.v1.ExtractResponse.blocks:type_name -> image.v1.Block
-	8,  // 2: image.v1.ExtractResponse.normalized:type_name -> image.v1.NormalizedMeta
-	7,  // 3: image.v1.ExtractResponse.usage:type_name -> image.v1.TokenUsage
-	7,  // 4: image.v1.PrepareAttachmentResponse.usage:type_name -> image.v1.TokenUsage
-	7,  // 5: image.v1.GenerateAltTextResponse.usage:type_name -> image.v1.TokenUsage
-	10, // 6: image.v1.Block.cells:type_name -> image.v1.Cell
-	11, // 7: image.v1.Block.anchor:type_name -> documents.v1.Anchor
-	1,  // 8: image.v1.ImageService.Extract:input_type -> image.v1.ExtractRequest
-	3,  // 9: image.v1.ImageService.PrepareAttachment:input_type -> image.v1.PrepareAttachmentRequest
-	5,  // 10: image.v1.ImageService.GenerateAltText:input_type -> image.v1.GenerateAltTextRequest
-	2,  // 11: image.v1.ImageService.Extract:output_type -> image.v1.ExtractResponse
-	4,  // 12: image.v1.ImageService.PrepareAttachment:output_type -> image.v1.PrepareAttachmentResponse
-	6,  // 13: image.v1.ImageService.GenerateAltText:output_type -> image.v1.GenerateAltTextResponse
-	11, // [11:14] is the sub-list for method output_type
-	8,  // [8:11] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	12, // 1: image.v1.ExtractResponse.blocks:type_name -> image.v1.Block
+	11, // 2: image.v1.ExtractResponse.normalized:type_name -> image.v1.NormalizedMeta
+	10, // 3: image.v1.ExtractResponse.usage:type_name -> image.v1.TokenUsage
+	1,  // 4: image.v1.ExtractResponse.rejected_code:type_name -> image.v1.RejectedCode
+	10, // 5: image.v1.PrepareAttachmentResponse.usage:type_name -> image.v1.TokenUsage
+	1,  // 6: image.v1.PrepareAttachmentResponse.rejected_code:type_name -> image.v1.RejectedCode
+	10, // 7: image.v1.GenerateAltTextResponse.usage:type_name -> image.v1.TokenUsage
+	13, // 8: image.v1.Block.cells:type_name -> image.v1.Cell
+	14, // 9: image.v1.Block.anchor:type_name -> documents.v1.Anchor
+	2,  // 10: image.v1.ImageService.Extract:input_type -> image.v1.ExtractRequest
+	4,  // 11: image.v1.ImageService.PrepareAttachment:input_type -> image.v1.PrepareAttachmentRequest
+	6,  // 12: image.v1.ImageService.GenerateAltText:input_type -> image.v1.GenerateAltTextRequest
+	8,  // 13: image.v1.ImageService.RenderPreview:input_type -> image.v1.RenderPreviewRequest
+	3,  // 14: image.v1.ImageService.Extract:output_type -> image.v1.ExtractResponse
+	5,  // 15: image.v1.ImageService.PrepareAttachment:output_type -> image.v1.PrepareAttachmentResponse
+	7,  // 16: image.v1.ImageService.GenerateAltText:output_type -> image.v1.GenerateAltTextResponse
+	9,  // 17: image.v1.ImageService.RenderPreview:output_type -> image.v1.RenderPreviewResponse
+	14, // [14:18] is the sub-list for method output_type
+	10, // [10:14] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_image_v1_image_proto_init() }
@@ -1124,8 +1368,8 @@ func file_image_v1_image_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_image_v1_image_proto_rawDesc), len(file_image_v1_image_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   10,
+			NumEnums:      2,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
