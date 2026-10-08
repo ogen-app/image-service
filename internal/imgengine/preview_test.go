@@ -50,6 +50,7 @@ func (ps *previewServer) written() ([]byte, string) {
 	return ps.put, ps.contentType
 }
 
+// encodeJPEG returns an opaque w×h JPEG.
 func encodeJPEG(t *testing.T, w, h int) []byte {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
@@ -63,6 +64,7 @@ func encodeJPEG(t *testing.T, w, h int) []byte {
 	return buf.Bytes()
 }
 
+// encodeAlphaPNG returns a w×h PNG with a translucent pixel.
 func encodeAlphaPNG(t *testing.T, w, h int) []byte {
 	t.Helper()
 	img := image.NewNRGBA(image.Rect(0, 0, w, h))
@@ -74,6 +76,7 @@ func encodeAlphaPNG(t *testing.T, w, h int) []byte {
 	return buf.Bytes()
 }
 
+// newTestEngine starts an engine with default limits.
 func newTestEngine(t *testing.T) *Engine {
 	t.Helper()
 	e, err := New(Config{})
@@ -83,6 +86,8 @@ func newTestEngine(t *testing.T) *Engine {
 	return e
 }
 
+// TestRenderPreview_DownscalesLongEdge checks an oversized opaque image is
+// scaled to the cap and PUT as JPEG.
 func TestRenderPreview_DownscalesLongEdge(t *testing.T) {
 	e := newTestEngine(t)
 	srv := newPreviewServer(t, encodeJPEG(t, 6000, 3000))
@@ -104,6 +109,8 @@ func TestRenderPreview_DownscalesLongEdge(t *testing.T) {
 	}
 }
 
+// TestRenderPreview_NeverUpscalesAndKeepsAlpha checks a small image keeps its
+// size and an alpha image stays PNG.
 func TestRenderPreview_NeverUpscalesAndKeepsAlpha(t *testing.T) {
 	e := newTestEngine(t)
 	srv := newPreviewServer(t, encodeAlphaPNG(t, 300, 200))
