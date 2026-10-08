@@ -6,9 +6,6 @@
 # emits BOTH gen/image/v1/ and gen/documents/v1/. Bump PROTO_VERSION to adopt a
 # new contract, then `make proto` and commit gen/.
 #
-# NOTE: RenderPreview needs buf.build/ogen-app/proto:v1.12.0 — `make proto` requires
-# that tag to be published first.
-#
 # The engine links libvips via CGO; set PKG_CONFIG_PATH so pkg-config finds
 # vips.pc on non-standard installs. On macOS with Homebrew: `brew install vips`.
 PROTO_MODULE  = buf.build/ogen-app/proto
