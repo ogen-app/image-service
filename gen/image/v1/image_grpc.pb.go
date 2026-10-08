@@ -22,6 +22,7 @@ const (
 	ImageService_Extract_FullMethodName           = "/image.v1.ImageService/Extract"
 	ImageService_PrepareAttachment_FullMethodName = "/image.v1.ImageService/PrepareAttachment"
 	ImageService_GenerateAltText_FullMethodName   = "/image.v1.ImageService/GenerateAltText"
+	ImageService_RenderPreview_FullMethodName     = "/image.v1.ImageService/RenderPreview"
 )
 
 // ImageServiceClient is the client API for ImageService service.
@@ -60,6 +61,14 @@ type ImageServiceClient interface {
 	PrepareAttachment(ctx context.Context, in *PrepareAttachmentRequest, opts ...grpc.CallOption) (*PrepareAttachmentResponse, error)
 	// GenerateAltText re-runs ONLY alt-text generation for an already-stored image.
 	GenerateAltText(ctx context.Context, in *GenerateAltTextRequest, opts ...grpc.CallOption) (*GenerateAltTextResponse, error)
+	// RenderPreview writes a still, metadata-free JPEG or PNG copy of an
+	// already-stored image with its long edge capped at max_long_edge (never
+	// upscaled), for clients that only take those formats (the Figma plugin).
+	// Opaque images become JPEG, images with alpha PNG; an animated source keeps
+	// its first frame. Reads source_url (presigned GET) and writes the copy to
+	// dest_put_url (presigned PUT, Content-Type set to the returned mime). No
+	// vision call.
+	RenderPreview(ctx context.Context, in *RenderPreviewRequest, opts ...grpc.CallOption) (*RenderPreviewResponse, error)
 }
 
 type imageServiceClient struct {
@@ -94,6 +103,16 @@ func (c *imageServiceClient) GenerateAltText(ctx context.Context, in *GenerateAl
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GenerateAltTextResponse)
 	err := c.cc.Invoke(ctx, ImageService_GenerateAltText_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *imageServiceClient) RenderPreview(ctx context.Context, in *RenderPreviewRequest, opts ...grpc.CallOption) (*RenderPreviewResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RenderPreviewResponse)
+	err := c.cc.Invoke(ctx, ImageService_RenderPreview_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -136,6 +155,14 @@ type ImageServiceServer interface {
 	PrepareAttachment(context.Context, *PrepareAttachmentRequest) (*PrepareAttachmentResponse, error)
 	// GenerateAltText re-runs ONLY alt-text generation for an already-stored image.
 	GenerateAltText(context.Context, *GenerateAltTextRequest) (*GenerateAltTextResponse, error)
+	// RenderPreview writes a still, metadata-free JPEG or PNG copy of an
+	// already-stored image with its long edge capped at max_long_edge (never
+	// upscaled), for clients that only take those formats (the Figma plugin).
+	// Opaque images become JPEG, images with alpha PNG; an animated source keeps
+	// its first frame. Reads source_url (presigned GET) and writes the copy to
+	// dest_put_url (presigned PUT, Content-Type set to the returned mime). No
+	// vision call.
+	RenderPreview(context.Context, *RenderPreviewRequest) (*RenderPreviewResponse, error)
 	mustEmbedUnimplementedImageServiceServer()
 }
 
@@ -154,6 +181,9 @@ func (UnimplementedImageServiceServer) PrepareAttachment(context.Context, *Prepa
 }
 func (UnimplementedImageServiceServer) GenerateAltText(context.Context, *GenerateAltTextRequest) (*GenerateAltTextResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GenerateAltText not implemented")
+}
+func (UnimplementedImageServiceServer) RenderPreview(context.Context, *RenderPreviewRequest) (*RenderPreviewResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RenderPreview not implemented")
 }
 func (UnimplementedImageServiceServer) mustEmbedUnimplementedImageServiceServer() {}
 func (UnimplementedImageServiceServer) testEmbeddedByValue()                      {}
@@ -230,6 +260,24 @@ func _ImageService_GenerateAltText_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ImageService_RenderPreview_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenderPreviewRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ImageServiceServer).RenderPreview(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ImageService_RenderPreview_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ImageServiceServer).RenderPreview(ctx, req.(*RenderPreviewRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ImageService_ServiceDesc is the grpc.ServiceDesc for ImageService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -248,6 +296,10 @@ var ImageService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GenerateAltText",
 			Handler:    _ImageService_GenerateAltText_Handler,
+		},
+		{
+			MethodName: "RenderPreview",
+			Handler:    _ImageService_RenderPreview_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

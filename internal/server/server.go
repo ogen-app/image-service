@@ -12,6 +12,9 @@
 //   - PrepareAttachment — validate + metadata + EXIF/geo strip (pixels preserved,
 //     imgengine) + optional alt text (vision). No structured extraction.
 //
+// RenderPreview is not an ingress path: it re-reads an already-stored image and
+// writes a downscaled JPEG/PNG copy for design tools (the Figma plugin).
+//
 // The vision client is key-optional: with no GEMINI_API_KEY the metadata paths
 // (PrepareAttachment without alt text) still serve, and any model-requiring RPC
 // returns Unavailable — the same graceful-degrade contract as audio-service.
@@ -250,6 +253,41 @@ func (s *Server) GenerateAltText(ctx context.Context, req *imagev1.GenerateAltTe
 	return &imagev1.GenerateAltTextResponse{
 		AltText: alt,
 		Usage:   toProtoUsage([]vision.Usage{usage}),
+	}, nil
+}
+
+// RenderPreview writes a still JPEG/PNG copy of a stored image, long edge capped
+// at max_long_edge. It needs no Gemini key.
+func (s *Server) RenderPreview(ctx context.Context, req *imagev1.RenderPreviewRequest) (*imagev1.RenderPreviewResponse, error) {
+	src := strings.TrimSpace(req.GetSourceUrl())
+	if src == "" {
+		return nil, status.Error(codes.InvalidArgument, "source_url is required")
+	}
+	dest := strings.TrimSpace(req.GetDestPutUrl())
+	if dest == "" {
+		return nil, status.Error(codes.InvalidArgument, "dest_put_url is required")
+	}
+	if req.GetMaxLongEdge() < 0 {
+		return nil, status.Error(codes.InvalidArgument, "max_long_edge must not be negative")
+	}
+
+	res, err := s.engine.RenderPreview(ctx, src, dest, int(req.GetMaxLongEdge()))
+	if err != nil {
+		return nil, mapEngineErr(err)
+	}
+
+	slog.InfoContext(ctx, "render preview complete",
+		"component", "server.preview",
+		"mime", res.MIME,
+		"width", res.Width,
+		"height", res.Height,
+		"bytes", res.SizeBytes,
+	)
+	return &imagev1.RenderPreviewResponse{
+		Mime:      res.MIME,
+		Width:     int32(res.Width),
+		Height:    int32(res.Height),
+		SizeBytes: res.SizeBytes,
 	}, nil
 }
 
