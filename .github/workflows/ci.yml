@@ -15,7 +15,7 @@ permissions:
 
 # Cancel superseded runs on the same PR. Each push to main gets a group of its
 # own, so no main run is cancelled or replaced while waiting, and every green
-# merge publishes its image; the build-push job orders them.
+# merge publishes its image.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -130,13 +130,10 @@ jobs:
     # succeed (needs implies success). Skip on PRs and on forks.
     needs: [go, proto, eval]
     if: github.event_name == 'push' && github.repository_owner == 'ogen-app'
-    # Back-to-back merges publish one at a time, so build numbers reach the
-    # registry and ogen-release in order. queue: max keeps every waiting run;
-    # by default a newer one would cancel the run already waiting.
-    concurrency:
-      group: build-push
-      cancel-in-progress: false
-      queue: max
+    # Runs of back-to-back merges can publish out of order: build 101 may push
+    # and dispatch before build 100. Each build has its own tag, so the
+    # registry doesn't care, and ogen-release ignores a bump to a build lower
+    # than the one it holds.
     permissions:
       contents: read
       packages: write
