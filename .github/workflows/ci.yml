@@ -1,28 +1,24 @@
 name: ci
 
-# Lint + test on every PR and push. The image is built and pushed only after all
-# test jobs (go, proto, eval) pass, and only on main or version tags — never on
-# PRs. Requires repo secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (a Docker Hub
-# access token).
+# Lint + test on every PR and push to main. The image is built and pushed to
+# GHCR only after all test jobs (go, proto, eval) pass, and only on main —
+# never on PRs.
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
 
-# Least-privilege default: the workflow token gets read-only repo access; no job
-# here needs write (the image publish authenticates to Docker Hub with its own
-# token, not GITHUB_TOKEN). Grant extra scopes per-job only if ever required.
+# Least-privilege default: the workflow token gets read-only repo access. Only
+# build-push adds packages: write, to push the image with GITHUB_TOKEN.
 permissions:
   contents: read
 
-# Serialize runs per ref so a slower older push to main can't finish last and
-# republish `latest` over a newer commit's image; a newer run cancels the
-# superseded one. Distinct tags/branches have distinct refs, so releases don't
-# cancel each other.
+# Cancel superseded runs on the same PR. Each push to main gets a group of its
+# own, so no main run is cancelled or replaced while waiting, and every green
+# merge publishes its image; the build-push job orders them.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   go:
@@ -125,43 +121,70 @@ jobs:
           CGO_ENABLED: "1"
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
+  # Every green main push publishes ghcr.io/ogen-app/image-service:<build>,
+  # where build is the commit count on main, then asks ogen-release to bump
+  # image-service to it.
   build-push:
     runs-on: ubuntu-latest
     # Gate the image on tests: this job won't start until go, proto, and eval
     # succeed (needs implies success). Skip on PRs and on forks.
     needs: [go, proto, eval]
     if: github.event_name == 'push' && github.repository_owner == 'ogen-app'
+    # Back-to-back merges publish one at a time, so build numbers reach the
+    # registry and ogen-release in order. queue: max keeps every waiting run;
+    # by default a newer one would cancel the run already waiting.
+    concurrency:
+      group: build-push
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: read
+      packages: write
     steps:
+      # Full history: the build number is the commit count, which a shallow
+      # clone reports as 1.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Build number
+        id: build
+        run: echo "number=$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      - name: Log in to Docker Hub
+      - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Image metadata
-        id: meta
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
-        with:
-          images: ${{ secrets.DOCKERHUB_USERNAME }}/image-service
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,format=short
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-
+      # The source label links the package to this repo, which is what lets
+      # GITHUB_TOKEN push to it.
       - name: Build and push
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           platforms: linux/amd64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ghcr.io/ogen-app/image-service:${{ steps.build.outputs.number }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/ogen-app/image-service
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Best effort: a missing ogen-release repo or token must not fail main.
+      - name: Dispatch bump to ogen-release
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_DISPATCH_TOKEN }}
+          BUILD: ${{ steps.build.outputs.number }}
+        run: |
+          gh api repos/ogen-app/ogen-release/dispatches \
+            -f event_type=bump \
+            -f 'client_payload[service]=image-service' \
+            -F "client_payload[build]=$BUILD" \
+            -f "client_payload[revision]=$GITHUB_SHA"
