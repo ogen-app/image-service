@@ -173,11 +173,24 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Best effort: a missing ogen-release repo or token must not fail main.
+      # The release App's token, limited to ogen-release, sends the bump. Both
+      # steps are best effort: a missing App or ogen-release must not fail main.
+      - name: Release App token
+        id: release-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ogen-app
+          repositories: ogen-release
+          permission-contents: write
+
       - name: Dispatch bump to ogen-release
+        if: steps.release-token.outcome == 'success'
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ steps.release-token.outputs.token }}
           BUILD: ${{ steps.build.outputs.number }}
         run: |
           gh api repos/ogen-app/ogen-release/dispatches \
