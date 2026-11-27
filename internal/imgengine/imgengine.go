@@ -722,8 +722,8 @@ func reclaimMemory() {
 // magic bytes, rejects SVG/vector, enforces the raster allow-list, and reads the
 // declared dimensions from the container header. For the ISO-BMFF family
 // (HEIC/AVIF) the exact dimensions live deep in the box structure, so a bounded
-// header parse extracts them; when they can't be found cheaply, the post-decode
-// belt-and-braces guard in loadAndGuard still catches an oversize image.
+// header parse extracts them. An image whose dimensions can't be read this way
+// is rejected: nothing is ever decoded without a size checked against MaxPixels.
 
 // probeHeader returns the canonical format name ("jpeg"/"png"/... ) and the
 // header-declared width/height. It returns a wrapped Err* sentinel on a vector
@@ -756,18 +756,19 @@ func probeHeader(b []byte) (format string, width, height int, err error) {
 	case "tiff":
 		w, h, ok := tiffDimensions(b)
 		if !ok {
-			// TIFF dimensions can be spread across IFD entries in either byte order;
-			// if the cheap parse misses them, defer to the post-decode guard rather
-			// than reject a valid TIFF.
-			return f, 0, 0, nil
+			// ImageWidth/ImageLength are required in every IFD, so a TIFF whose
+			// first IFD lacks them is malformed. Never decode without a size to
+			// check against MaxPixels.
+			return "", 0, 0, fmt.Errorf("%w: unreadable tiff dimensions", ErrCorrupt)
 		}
 		return f, w, h, nil
 	case "heic", "avif":
 		w, h, ok := isoBMFFDimensions(b)
 		if !ok {
-			// The ispe box wasn't found in the scanned prefix; defer to the
-			// post-decode guard (libvips will still refuse a true bomb on decode).
-			return f, 0, 0, nil
+			// The ispe box wasn't found in the scanned prefix (e.g. the meta box
+			// sits after the image data). Without a size to check against
+			// MaxPixels the decode can't be bounded, so refuse it.
+			return "", 0, 0, fmt.Errorf("%w: %s dimensions not found in header", ErrUnsupported, f)
 		}
 		return f, w, h, nil
 	default:
